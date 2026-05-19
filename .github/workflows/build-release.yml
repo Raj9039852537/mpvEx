@@ -147,4 +147,4 @@ jobs:
           AI_SUMMARY: ${{ steps.prepare.outputs.ai_summary }}
         run: |
           python -m pip install --upgrade pip requests
-          python Tools/scripts/upload2.py
+          python upload2.py
