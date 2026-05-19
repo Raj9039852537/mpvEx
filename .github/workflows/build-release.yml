@@ -39,7 +39,7 @@ jobs:
         id: build_apk
         run: |
           ./gradlew assembleRelease
-          APK=$(find app/build/outputs/apk/release/ -name '*-release.apk' | head -n1)
+          APK=$(find app/build/outputs/apk/standard/release/ -name '*-release.apk' | head -n1)
           if [ -z "$APK" ]; then
             echo "No APK found!"
             exit 1
@@ -74,77 +74,10 @@ jobs:
         with:
           python-version: 3.12
 
-      - name: Prepare AI commit summary
-        id: prepare
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HEAD_MSG: ${{ github.event.head_commit.message }}
-        run: |
-          set -e
-          BRANCH="${{ github.ref_name }}"
-          REPO="${{ github.repository }}"
-          HEAD_SHA="${{ github.sha }}"
-
-          LAST_SHA=$(curl -s -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://api.github.com/repos/$REPO/actions/workflows/$GITHUB_WORKFLOW/runs?status=completed&conclusion=success&branch=$BRANCH&per_page=1" | jq -r '.workflow_runs[0].head_sha // empty')
-
-          COMMIT_TEXT=""
-          TOTAL_COMMITS=0
-          if [ -n "$LAST_SHA" ]; then
-            COMPARE=$(curl -s -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/$REPO/compare/$LAST_SHA...$HEAD_SHA")
-            TOTAL_COMMITS=$(echo "$COMPARE" | jq -r '.total_commits // 0')
-            COMMIT_TEXT=$(echo "$COMPARE" | jq -r '[.commits[].commit.message] | join("\n\n")')
-          fi
-          if [ -z "$COMMIT_TEXT" ]; then
-            COMMIT_TEXT="$HEAD_MSG"
-          fi
-
-          if [ "$TOTAL_COMMITS" -lt 3 ]; then
-            echo "ai_summary<<EOF" >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          MODEL_ID="openai/gpt-4o"
-          PROMPT=$(cat << 'EOP'
-          Please summarize the Git commit messages between the last CI build and the current build using Telegram HTML formatting (not Markdown):
-          - Output strictly valid HTML supported by Telegram Bot API.
-          - Group by type with HTML headers: <b>✨ Features</b>, <b>🐛 Fixes</b>, <b>♻️ Refactors</b>, <b>⚠️ Breaking Changes</b>, <b>🧹 Others</b>.
-          - Use one line per item, max 20 items.
-          - Escape &, <, > as &amp;, &lt;, &gt;.
-          Here are the commit messages:
-          EOP
-          )
-          CONTENT="$PROMPT\n$COMMIT_TEXT"
-          PAYLOAD=$(jq -n --arg content "$CONTENT" --arg model "$MODEL_ID" '{messages:[{role:"user",content:$content}],model:$model}')
-          RAW_RESPONSE=$(curl -s "https://models.github.ai/inference/chat/completions" \
-             -H "Content-Type: application/json" \
-             -H "Authorization: Bearer $GITHUB_TOKEN" \
-             -d "$PAYLOAD")
-          SUMMARY=$(echo "$RAW_RESPONSE" | jq -r '.choices[0].message.content // empty')
-          COMBINED=""
-          if [ -n "$SUMMARY" ]; then
-            COMBINED="Changes since last build:\n\n$SUMMARY"
-          fi
-          if [ -n "$LAST_SHA" ]; then
-            DIFF_URL="https://github.com/$REPO/compare/$LAST_SHA...$HEAD_SHA"
-          else
-            DIFF_URL="https://github.com/$REPO/commit/$HEAD_SHA"
-          fi
-          COMBINED="$COMBINED\n\n<a href=\"$DIFF_URL\"><b>Full changes</b></a>"
-          echo "ai_summary<<EOF" >> $GITHUB_OUTPUT
-          echo "$COMBINED" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Send APK to Telegram
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          AI_SUMMARY: ${{ steps.prepare.outputs.ai_summary }}
         run: |
           python -m pip install --upgrade pip requests
-          python upload2.py
+          python Tools/scripts/upload2.py
